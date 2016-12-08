@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -15,13 +16,21 @@ import (
 	"github.com/pkg/errors"
 )
 
+const DefaultHost = "localhost"
+const DefaultPort = "7681"
+
 type ClientConfig struct {
+	// Host is a host:port adderss of the Almond router.
+	// The default is localhost:7681.
 	Host     string
 	User     string
 	Password string
-	Logger   *log.Logger
+	// Logger is used to log any errors that may occur.
+	// If nil no logs will be written.
+	Logger *log.Logger
 }
 
+// Client provides an API for interacting with the Securifi Almond websocket API.
 type Client struct {
 	mu        sync.RWMutex
 	wg        sync.WaitGroup
@@ -41,9 +50,19 @@ type request struct {
 }
 
 func NewClient(c ClientConfig) (*Client, error) {
+	h, p, err := net.SplitHostPort(c.Host)
+	if err != nil {
+		return nil, errors.Wrapf(err, "invalid host %q", c.Host)
+	}
+	if h == "" {
+		h = DefaultHost
+	}
+	if p == "" {
+		p = DefaultPort
+	}
 	u := url.URL{
 		Scheme: "ws",
-		Host:   c.Host,
+		Host:   net.JoinHostPort(h, p),
 		Path:   path.Join("/", c.User, c.Password),
 	}
 
@@ -85,6 +104,13 @@ func (c *Client) Close() {
 	c.wg.Wait()
 }
 
+// Request sends a request but do not wait for the response.
+func (c *Client) Request(r Request) error {
+	_, _, err := c.Do(r)
+	return err
+}
+
+// Do performs a request and returns a channel were the response can be retrieved.
 func (c *Client) Do(r Request) (string, <-chan Response, error) {
 	c.mu.Lock()
 	c.idx++
@@ -105,6 +131,8 @@ func (c *Client) Do(r Request) (string, <-chan Response, error) {
 	return req.MobileInternalIndex, req.ResponseC, nil
 }
 
+// Subscribe returns a channel that will receive events for the desired command type.
+// Send operations on the channel are non-blocking so events may be dropped.
 func (c *Client) Subscribe(ct string) <-chan Response {
 	sub := make(chan Response, 10)
 	c.mu.Lock()
@@ -114,7 +142,6 @@ func (c *Client) Subscribe(ct string) <-chan Response {
 }
 
 func (c *Client) readLoop() {
-	log.Println("Start readLoop")
 	for {
 		r := make(genericResponse)
 		if err := c.conn.ReadJSON(&r); err != nil {
@@ -142,8 +169,6 @@ func (c *Client) run() {
 			return
 		case r := <-c.requests:
 			activeRequests[r.MobileInternalIndex] = r.ResponseC
-			b, _ := json.Marshal(r.Request)
-			log.Println("write Request", string(b))
 			if err := c.conn.WriteJSON(r.Request); err != nil {
 				c.logger.Printf("failed to write request JSON. MII: %s Error: %v", r.MobileInternalIndex, err)
 			}
