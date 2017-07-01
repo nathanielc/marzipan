@@ -40,7 +40,7 @@ type Client struct {
 	responses chan Response
 	idx       int
 	closing   chan struct{}
-	subs      map[string][]chan Response
+	newSubs   chan sub
 }
 
 type request struct {
@@ -82,7 +82,7 @@ func NewClient(c ClientConfig) (*Client, error) {
 		closing:   make(chan struct{}),
 		requests:  make(chan request),
 		responses: make(chan Response),
-		subs:      make(map[string][]chan Response),
+		newSubs:   make(chan sub),
 		logger:    logger,
 	}
 	cli.wg.Add(1)
@@ -104,7 +104,7 @@ func (c *Client) Close() {
 	c.wg.Wait()
 }
 
-// Request sends a request but do not wait for the response.
+// Request sends a request but does not wait for the response.
 func (c *Client) Request(r Request) error {
 	_, _, err := c.Do(r)
 	return err
@@ -132,13 +132,21 @@ func (c *Client) Do(r Request) (string, <-chan Response, error) {
 }
 
 // Subscribe returns a channel that will receive events for the desired command type.
+// If ct is an empty string then responses to all command types are returned.
 // Send operations on the channel are non-blocking so events may be dropped.
-func (c *Client) Subscribe(ct string) <-chan Response {
-	sub := make(chan Response, 10)
-	c.mu.Lock()
-	c.subs[ct] = append(c.subs[ct], sub)
-	c.mu.Unlock()
-	return sub
+func (c *Client) Subscribe(ct string) (<-chan Response, error) {
+	ch := make(chan Response, 10)
+	select {
+	case c.newSubs <- sub{ct: ct, ch: ch}:
+	case <-c.closing:
+		return nil, errors.New("client closed")
+	}
+	return ch, nil
+}
+
+type sub struct {
+	ct string
+	ch chan Response
 }
 
 func (c *Client) readLoop() {
@@ -163,10 +171,18 @@ func (c *Client) readLoop() {
 
 func (c *Client) run() {
 	activeRequests := make(map[string]chan Response)
+	subsByCT := make(map[string][]chan Response)
+	var globalSubs []chan Response
 	for {
 		select {
 		case <-c.closing:
 			return
+		case sub := <-c.newSubs:
+			if sub.ct == "" {
+				globalSubs = append(globalSubs, sub.ch)
+			} else {
+				subsByCT[sub.ct] = append(subsByCT[sub.ct], sub.ch)
+			}
 		case r := <-c.requests:
 			activeRequests[r.MobileInternalIndex] = r.ResponseC
 			if err := c.conn.WriteJSON(r.Request); err != nil {
@@ -179,10 +195,14 @@ func (c *Client) run() {
 				delete(activeRequests, mii)
 			}
 			ct := r.CommandType()
-			c.mu.RLock()
-			subs := c.subs[ct]
-			c.mu.RUnlock()
+			subs := subsByCT[ct]
 			for _, sub := range subs {
+				select {
+				case sub <- r:
+				default:
+				}
+			}
+			for _, sub := range globalSubs {
 				select {
 				case sub <- r:
 				default:
@@ -237,6 +257,25 @@ func (r genericResponse) Response() (Response, error) {
 		}
 		err := r.unmarshal("Devices", &diu.Devices)
 		return diu, err
+	case "DynamicAlmondModeUpdated":
+		damu := &DynamicAlmondModeUpdated{
+			Meta: r.Meta(),
+		}
+		if err := r.unmarshal("Mode", &damu.Mode); err != nil {
+			return nil, err
+		}
+		if err := r.unmarshal("EmailId", &damu.EmailId); err != nil {
+			return nil, err
+		}
+		return damu, nil
+	case "UpdateDeviceIndex":
+		udi := &UpdateDeviceIndex{
+			Meta: r.Meta(),
+		}
+		if err := r.unmarshal("Success", &udi.Success); err != nil {
+			return nil, err
+		}
+		return udi, nil
 	default:
 		return nil, fmt.Errorf("unsupported command type: %q", commandType)
 	}

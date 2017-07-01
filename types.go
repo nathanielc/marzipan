@@ -56,15 +56,42 @@ func NewDeviceListRequest() Request {
 
 type DynamicIndexUpdated struct {
 	Meta
-	Devices map[string]Device
+	Devices map[string]Device `json:"Devices"`
 }
 
 type Device struct {
-	Data         map[string]string
-	DeviceValues map[string]DeviceValue
+	Data         map[string]string      `json:"Data"`
+	DeviceValues map[string]DeviceValue `json:"DeviceValues"`
 }
 
 type DeviceValue struct {
 	Name  string
 	Value string
+}
+
+type DynamicAlmondModeUpdated struct {
+	Meta
+	Mode    string
+	EmailId string
+}
+
+type UpdateDeviceIndexRequest struct {
+	Meta
+	ID    string `json:"ID"`
+	Index string `json:"Index"`
+	Value string `json:"Value"`
+}
+
+func NewUpdateDeviceIndexRequest(id, index, value string) Request {
+	return &UpdateDeviceIndexRequest{
+		Meta:  Meta{CT: "UpdateDeviceIndex"},
+		ID:    id,
+		Index: index,
+		Value: value,
+	}
+}
+
+type UpdateDeviceIndex struct {
+	Meta
+	Success string `json:"Success"`
 }
