@@ -1,5 +1,7 @@
 package marzipan
 
+import "strconv"
+
 const (
 	Action              = "Action"
 	CommandType         = "CommandType"
@@ -68,15 +70,32 @@ type DynamicClientJoined struct {
 }
 
 type ClientSpec struct {
-	ID            string `json:"ID"`
-	Name          string `json:"Name"`
-	Connection    string `json:"Connection"`
-	MAC           string `json:"MAC"`
-	Type          string `json:"Type"`
-	LastKnownIP   string `json:"LastKnownIP"`
-	Active        bool   `json:"Active"`
-	UseAsPresence bool   `json:"UseAsPresence"`
+	ID            string  `json:"ID"`
+	Name          string  `json:"Name"`
+	Connection    string  `json:"Connection"`
+	MAC           string  `json:"MAC"`
+	Type          string  `json:"Type"`
+	LastKnownIP   string  `json:"LastKnownIP"`
+	Active        boolean `json:"Active"`
+	UseAsPresence boolean `json:"UseAsPresence"`
 	// TODO add all fields here
+}
+
+type boolean bool
+
+func (b *boolean) MarshalText() ([]byte, error) {
+	if b {
+		return []byte("true"), nil
+	}
+	return []byte("false"), nil
+}
+func (b *boolean) UnmarshalText(data []byte) error {
+	bl, err := strconv.ParseBool(string(data))
+	if err != nil {
+		return err
+	}
+	*b = bl
+	return nil
 }
 
 type DynamicIndexUpdated struct {
